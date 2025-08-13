@@ -32,6 +32,9 @@ dependencies {
     // Logging
     implementation(libs.slf4j.api)
     testRuntimeOnly(libs.logback.classic)
+
+    // Caching
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.2")
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
