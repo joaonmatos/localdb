@@ -1,15 +1,6 @@
 package com.localdb.storage.btree;
 
-public class DeleteResult<K, V> {
-  private final boolean deleted;
-  private final boolean underflow;
-  private final K borrowedKey;
-
-  private DeleteResult(boolean deleted, boolean underflow, K borrowedKey) {
-    this.deleted = deleted;
-    this.underflow = underflow;
-    this.borrowedKey = borrowedKey;
-  }
+public record DeleteResult<K, V>(boolean deleted, boolean underflow, K borrowedKey) {
 
   public static <K, V> DeleteResult<K, V> success() {
     return new DeleteResult<>(true, false, null);
