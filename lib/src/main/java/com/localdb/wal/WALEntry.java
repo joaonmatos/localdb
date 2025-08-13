@@ -24,6 +24,8 @@ public class WALEntry<K, V> {
     UPDATE,
     /** Delete operation - removes a key-value pair */
     DELETE,
+    /** Compare-and-set operation - conditionally updates a key-value pair */
+    COMPARE_AND_SET,
     /** Transaction begin marker */
     TRANSACTION_BEGIN,
     /** Transaction commit marker */
@@ -38,6 +40,7 @@ public class WALEntry<K, V> {
   private final K key;
   private final V value;
   private final V oldValue;
+  private final V expectedValue;
   private final Instant timestamp;
 
   /**
@@ -57,12 +60,37 @@ public class WALEntry<K, V> {
       K key,
       V value,
       V oldValue) {
+    this(sequenceNumber, transactionId, operation, key, value, oldValue, null);
+  }
+
+  /**
+   * Creates a new WAL entry with the specified parameters, including expected value for
+   * compare-and-set operations.
+   *
+   * @param sequenceNumber the unique sequence number for this entry
+   * @param transactionId the ID of the transaction this entry belongs to
+   * @param operation the type of operation being logged
+   * @param key the key involved in the operation (may be null for transaction markers)
+   * @param value the new value (may be null for deletes and transaction markers)
+   * @param oldValue the previous value (may be null for inserts and transaction markers)
+   * @param expectedValue the expected value for compare-and-set operations (null for other
+   *     operations)
+   */
+  public WALEntry(
+      long sequenceNumber,
+      long transactionId,
+      OperationType operation,
+      K key,
+      V value,
+      V oldValue,
+      V expectedValue) {
     this.sequenceNumber = sequenceNumber;
     this.transactionId = transactionId;
     this.operation = operation;
     this.key = key;
     this.value = value;
     this.oldValue = oldValue;
+    this.expectedValue = expectedValue;
     this.timestamp = Instant.now();
   }
 
@@ -105,6 +133,10 @@ public class WALEntry<K, V> {
     return oldValue;
   }
 
+  public V getExpectedValue() {
+    return expectedValue;
+  }
+
   public Instant getTimestamp() {
     return timestamp;
   }
@@ -119,12 +151,14 @@ public class WALEntry<K, V> {
         && operation == walEntry.operation
         && Objects.equals(key, walEntry.key)
         && Objects.equals(value, walEntry.value)
-        && Objects.equals(oldValue, walEntry.oldValue);
+        && Objects.equals(oldValue, walEntry.oldValue)
+        && Objects.equals(expectedValue, walEntry.expectedValue);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(sequenceNumber, transactionId, operation, key, value, oldValue);
+    return Objects.hash(
+        sequenceNumber, transactionId, operation, key, value, oldValue, expectedValue);
   }
 
   @Override
@@ -142,6 +176,8 @@ public class WALEntry<K, V> {
         + value
         + ", oldValue="
         + oldValue
+        + ", expectedValue="
+        + expectedValue
         + ", timestamp="
         + timestamp
         + '}';

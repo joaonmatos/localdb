@@ -174,4 +174,134 @@ class LocalDatabaseImplTest {
       }
     }
   }
+
+  @Test
+  void testCompareAndSetSuccess() throws IOException {
+    database.put("key1", "originalValue");
+
+    assertTrue(database.compareAndSet("key1", "originalValue", "newValue"));
+    assertEquals(Optional.of("newValue"), database.get("key1"));
+  }
+
+  @Test
+  void testCompareAndSetFailure() throws IOException {
+    database.put("key1", "originalValue");
+
+    assertFalse(database.compareAndSet("key1", "wrongExpectedValue", "newValue"));
+    assertEquals(Optional.of("originalValue"), database.get("key1"));
+  }
+
+  @Test
+  void testCompareAndSetNonExistentKey() throws IOException {
+    assertTrue(database.compareAndSet("newKey", null, "newValue"));
+    assertEquals(Optional.of("newValue"), database.get("newKey"));
+  }
+
+  @Test
+  void testCompareAndSetFailureExpectingNull() throws IOException {
+    database.put("key1", "existingValue");
+
+    assertFalse(database.compareAndSet("key1", null, "newValue"));
+    assertEquals(Optional.of("existingValue"), database.get("key1"));
+  }
+
+  @Test
+  void testCompareAndSetWithTransaction() throws IOException {
+    database.put("key1", "originalValue");
+
+    var tx = database.beginTransaction();
+    assertTrue(database.compareAndSet("key1", "originalValue", "newValue", tx));
+
+    assertEquals(Optional.of("originalValue"), database.get("key1"));
+    assertEquals(Optional.of("newValue"), database.get("key1", tx));
+
+    database.commitTransaction(tx);
+    assertEquals(Optional.of("newValue"), database.get("key1"));
+  }
+
+  @Test
+  void testCompareAndSetWithTransactionFailure() throws IOException {
+    database.put("key1", "originalValue");
+
+    var tx = database.beginTransaction();
+    assertFalse(database.compareAndSet("key1", "wrongValue", "newValue", tx));
+
+    assertEquals(Optional.of("originalValue"), database.get("key1"));
+    assertEquals(Optional.of("originalValue"), database.get("key1", tx));
+
+    database.commitTransaction(tx);
+    assertEquals(Optional.of("originalValue"), database.get("key1"));
+  }
+
+  @Test
+  void testCompareAndSetWithTransactionRollback() throws IOException {
+    database.put("key1", "originalValue");
+
+    var tx = database.beginTransaction();
+    assertTrue(database.compareAndSet("key1", "originalValue", "newValue", tx));
+
+    assertEquals(Optional.of("newValue"), database.get("key1", tx));
+
+    database.rollbackTransaction(tx);
+    assertEquals(Optional.of("originalValue"), database.get("key1"));
+  }
+
+  @Test
+  void testCompareAndSetConcurrencyScenario() throws IOException {
+    database.put("counter", "0");
+
+    var tx1 = database.beginTransaction();
+    var tx2 = database.beginTransaction();
+
+    assertTrue(database.compareAndSet("counter", "0", "1", tx1));
+    assertTrue(database.compareAndSet("counter", "0", "2", tx2));
+
+    database.commitTransaction(tx1);
+
+    try {
+      database.commitTransaction(tx2);
+      assertFalse(true, "Expected CompareAndSetException for tx2");
+    } catch (CompareAndSetException e) {
+      assertEquals("counter", e.getKey());
+      assertEquals("0", e.getExpectedValue());
+      assertEquals("1", e.getActualValue());
+    }
+
+    assertEquals(Optional.of("1"), database.get("counter"));
+  }
+
+  @Test
+  void testCompareAndSetWithCommittedValue() throws IOException {
+    database.put("counter", "0");
+
+    var tx1 = database.beginTransaction();
+    assertTrue(database.compareAndSet("counter", "0", "1", tx1));
+    database.commitTransaction(tx1);
+
+    var tx2 = database.beginTransaction();
+    assertFalse(database.compareAndSet("counter", "0", "2", tx2));
+    assertTrue(database.compareAndSet("counter", "1", "2", tx2));
+    database.commitTransaction(tx2);
+
+    assertEquals(Optional.of("2"), database.get("counter"));
+  }
+
+  @Test
+  void testCompareAndSetCommitTimeValidation() throws IOException {
+    database.put("sharedKey", "initialValue");
+
+    var tx1 = database.beginTransaction();
+    var tx2 = database.beginTransaction();
+
+    assertTrue(database.compareAndSet("sharedKey", "initialValue", "value1", tx1));
+    assertTrue(database.compareAndSet("sharedKey", "initialValue", "value2", tx2));
+
+    database.commitTransaction(tx1);
+
+    assertFalse(database.compareAndSet("sharedKey", "initialValue", "value3"));
+
+    assertEquals(Optional.of("value1"), database.get("sharedKey"));
+
+    database.rollbackTransaction(tx2);
+  }
 }

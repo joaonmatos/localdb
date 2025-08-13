@@ -201,6 +201,38 @@ public interface LocalDatabase<K, V> extends AutoCloseable {
   boolean isEmpty() throws IOException;
 
   /**
+   * Atomically compares the current value for the specified key with an expected value and, if they
+   * are equal, updates the key to a new value. This operation is useful for implementing optimistic
+   * concurrency control. The comparison is performed both at operation time and at commit time to
+   * detect concurrent modifications.
+   *
+   * @param key the key to update
+   * @param expectedValue the expected current value (null if expecting the key to not exist)
+   * @param newValue the new value to set
+   * @return true if the value was updated, false if the current value didn't match the expected
+   *     value either at operation time or at commit time
+   * @throws IOException if an I/O error occurs during the operation
+   */
+  boolean compareAndSet(K key, V expectedValue, V newValue) throws IOException;
+
+  /**
+   * Atomically compares the current value for the specified key with an expected value and, if they
+   * are equal, updates the key to a new value within a transaction context. The comparison is
+   * performed both at operation time and at commit time to detect concurrent modifications.
+   *
+   * @param key the key to update
+   * @param expectedValue the expected current value (null if expecting the key to not exist)
+   * @param newValue the new value to set
+   * @param transaction the transaction context
+   * @return true if the value was updated, false if the current value didn't match the expected
+   *     value either at operation time or at commit time
+   * @throws IOException if an I/O error occurs during the operation
+   * @throws IllegalArgumentException if the transaction is null or not active
+   */
+  boolean compareAndSet(K key, V expectedValue, V newValue, Transaction<K, V> transaction)
+      throws IOException;
+
+  /**
    * Forces any buffered output to be written to persistent storage. This ensures that all previous
    * operations are durably stored.
    *

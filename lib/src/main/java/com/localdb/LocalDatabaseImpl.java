@@ -299,6 +299,9 @@ public class LocalDatabaseImpl<K, V> implements LocalDatabase<K, V> {
       applyTransactionOperations(transaction);
       transactionManager.commitTransaction(transaction);
       wal.flush();
+    } catch (CompareAndSetException e) {
+      transactionManager.rollbackTransaction(transaction);
+      throw e;
     } finally {
       databaseLock.writeLock().unlock();
     }
@@ -319,6 +322,70 @@ public class LocalDatabaseImpl<K, V> implements LocalDatabase<K, V> {
   @Override
   public boolean containsKey(K key, Transaction<K, V> transaction) throws IOException {
     return get(key, transaction).isPresent();
+  }
+
+  @Override
+  public boolean compareAndSet(K key, V expectedValue, V newValue) throws IOException {
+    Transaction<K, V> transaction = beginTransaction();
+    try {
+      boolean result = compareAndSet(key, expectedValue, newValue, transaction);
+      if (result) {
+        commitTransaction(transaction);
+        return true;
+      } else {
+        rollbackTransaction(transaction);
+        return false;
+      }
+    } catch (CompareAndSetException e) {
+      rollbackTransaction(transaction);
+      return false;
+    } catch (Exception e) {
+      rollbackTransaction(transaction);
+      throw e;
+    }
+  }
+
+  @Override
+  public boolean compareAndSet(K key, V expectedValue, V newValue, Transaction<K, V> transaction)
+      throws IOException {
+    checkClosed();
+    if (transaction == null || !transaction.isActive()) {
+      throw new IllegalArgumentException("Transaction must be active");
+    }
+
+    databaseLock.writeLock().lock();
+    try {
+      var currentValue = get(key, transaction);
+
+      boolean valuesEqual;
+      if (expectedValue == null && currentValue.isEmpty()) {
+        valuesEqual = true;
+      } else if (expectedValue != null && currentValue.isPresent()) {
+        valuesEqual = expectedValue.equals(currentValue.get());
+      } else {
+        valuesEqual = false;
+      }
+
+      if (!valuesEqual) {
+        return false;
+      }
+
+      var entry =
+          new WALEntry<>(
+              getNextSequenceNumber(),
+              transaction.getTransactionId(),
+              WALEntry.OperationType.COMPARE_AND_SET,
+              key,
+              newValue,
+              currentValue.orElse(null),
+              expectedValue);
+
+      transactionManager.addOperationToTransaction(transaction, entry);
+      return true;
+
+    } finally {
+      databaseLock.writeLock().unlock();
+    }
   }
 
   @Override
@@ -382,7 +449,8 @@ public class LocalDatabaseImpl<K, V> implements LocalDatabase<K, V> {
     var committedEntries = wal.readAll();
     for (var entry : committedEntries) {
       if (entry.getOperation() == WALEntry.OperationType.INSERT
-          || entry.getOperation() == WALEntry.OperationType.UPDATE) {
+          || entry.getOperation() == WALEntry.OperationType.UPDATE
+          || entry.getOperation() == WALEntry.OperationType.COMPARE_AND_SET) {
         btree.insert(entry.getKey(), entry.getValue());
       } else if (entry.getOperation() == WALEntry.OperationType.DELETE) {
         btree.delete(entry.getKey());
@@ -394,16 +462,37 @@ public class LocalDatabaseImpl<K, V> implements LocalDatabase<K, V> {
 
   /**
    * Applies all operations from a committed transaction to the B+ tree. This method processes
-   * INSERT, UPDATE, and DELETE operations in sequence.
+   * INSERT, UPDATE, DELETE, and COMPARE_AND_SET operations in sequence.
    *
    * @param transaction the transaction whose operations should be applied
    * @throws IOException if an I/O error occurs during operation application
+   * @throws CompareAndSetException if a compare-and-set operation fails validation at commit time
    */
   private void applyTransactionOperations(Transaction<K, V> transaction) throws IOException {
     for (var entry : transaction.getOperations()) {
       switch (entry.getOperation()) {
         case INSERT, UPDATE -> btree.insert(entry.getKey(), entry.getValue());
         case DELETE -> btree.delete(entry.getKey());
+        case COMPARE_AND_SET -> {
+          var currentValue = btree.search(entry.getKey());
+          var expectedValue = entry.getExpectedValue();
+
+          boolean valuesEqual;
+          if (expectedValue == null && currentValue.isEmpty()) {
+            valuesEqual = true;
+          } else if (expectedValue != null && currentValue.isPresent()) {
+            valuesEqual = expectedValue.equals(currentValue.get());
+          } else {
+            valuesEqual = false;
+          }
+
+          if (!valuesEqual) {
+            throw new CompareAndSetException(
+                entry.getKey(), expectedValue, currentValue.orElse(null));
+          }
+
+          btree.insert(entry.getKey(), entry.getValue());
+        }
         case TRANSACTION_BEGIN, TRANSACTION_COMMIT, TRANSACTION_ROLLBACK -> {
           // These operations are not data operations and should not be applied here
         }
